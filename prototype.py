@@ -1,7 +1,9 @@
 import cv2
 import mediapipe as mp
 import os
-
+import math
+from collections import deque
+import time
 
 MODEL_FILE = 'face_landmarker.task'
 CAM_ID = 0
@@ -24,6 +26,23 @@ def draw_landmarks(frame, landmarks):
             x, y = int(point.x * w), int(point.y * h)
             cv2.circle(frame, (x, y), 1, DOT_COLOR, -1)
 
+left_eye = [33, 160, 158, 133, 153, 144]
+right_eye = [362, 385, 387, 263, 373, 380]
+
+detect_blink = 0.25
+i_cls_fr = 2
+detect_suspision = 70
+
+def calc_eye_open(landmarks, eyes_indicators):
+    points = [landmarks[i] for i in eyes_indicators]
+    v1 = math.dist((points[1].x, points[1].y), (points[5].x, points[5].y))
+    v2 = math.dist((points[2].x, points[2].y), (points[4].x, points[4].y))
+    h  = math.dist((points[0].x, points[0].y), (points[3].x, points[3].y))
+    if h == 0:
+        return 0.3
+    
+    return (v1 + v2) / (2.0 * h)    # final ear 
+
 
 def main():
     print("Starting ORACLE....")
@@ -37,17 +56,45 @@ def main():
 
     print("Camera is ready. press esc to exit.")
 
+    blink_count = 0
+    lst_avg_ear = 1.0   # last frames eye aspect ratio
+    baseline_ear = None
+    cal_frames = 0
+    suspision_score = 0
+    frame_history = 0     # last 30 frames
+    i_cls_cnt = 0
+
     while True:
         ok, frame = cam.read()
         if not ok:
             break
 
-        # color pallate conversion. BGR to RGB
+        # color cov from BGR to RGB
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         result = detector.detect(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb))
 
         if result.face_landmarks:
             draw_landmarks(frame, result.face_landmarks)
+
+            lnmk = result.face_landmarks[0]
+            left_ear = calc_eye_open(lnmk, left_eye)
+            right_ear = calc_eye_open(lnmk, right_eye)
+            avg_ear = (left_ear + right_ear) / 2
+
+            if avg_ear < detect_blink:
+                i_cls_cnt += 1
+            else:
+                if i_cls_cnt >= i_cls_fr:
+                    blink_count += 1
+                i_cls_cnt = 0
+
+            lst_avg_ear = avg_ear
+
+            h, w, _ = frame.shape
+            cv2.putText(frame, f"EAR: {avg_ear:.3f}", (w - 180, 50),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,0), 2)
+            cv2.putText(frame, f"Blinks: {blink_count}", (w - 180, 80),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,0), 2)
 
         cv2.imshow(WINDOW_NAME, frame)
 
